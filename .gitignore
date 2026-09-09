@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+.env
+
+# IDE and OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Local calibration data and generated results
+data/calibration/*
+!data/calibration/.gitkeep
+outputs/*
+!outputs/.gitkeep
