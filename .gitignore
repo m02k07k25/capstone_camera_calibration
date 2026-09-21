@@ -17,3 +17,6 @@ data/calibration/*
 !data/calibration/.gitkeep
 outputs/*
 !outputs/.gitkeep
+
+# Downloaded pretrained model weights
+models/*.pt
