@@ -156,3 +156,28 @@ Ultralytics YOLO26 nano pose 모델을 사용합니다. 모델은 17개 COCO 관
 ```
 
 화면에서 양쪽 사람 관절이 검출될 때 `S`를 누르면 `outputs/pose_live`에 두 카메라의 2D 관절 JSON과 표시 이미지가 저장됩니다. `Q` 또는 `ESC`로 종료합니다. `--device auto`를 사용하면 CUDA가 있으면 GPU, 없으면 CPU를 자동 선택하고 GPU에서는 FP16을 사용합니다.
+
+## 7. Two-camera 3D pose reconstruction
+
+`stereo_pose.py` uses the existing YOLO 2D detections from camera 0 and camera 1, applies the stereo calibration, and triangulates the common COCO keypoints in millimeters. It also writes an `smpl_body_24` section using the SMPL body joint names. This first stage is a SMPL-compatible joint layout; it is not yet a fitted SMPL mesh.
+
+Run the live 3D view:
+
+```powershell
+.\.venv\Scripts\python.exe stereo_pose.py live --model models/yolo26n-pose.pt --stereo-calibration outputs/stereo_calibration.npz --camera-a 0 --camera-b 1 --backend dshow --width 1920 --height 1080 --preview-width 1600 --preview-height 700 --imgsz 640 --conf 0.35 --device 0
+```
+
+Press `S` or Space when at least six common joints are valid. Results are saved in `outputs/pose_3d`:
+
+- `stereo_pose_###.json`: raw 2D detections, triangulated `coco17_3d`, and derived `smpl_body_24`
+- `stereo_pose_###_camera_a.png`, `stereo_pose_###_camera_b.png`: annotated camera frames
+
+The JSON coordinates are in millimeters. The origin is the rectified camera A optical center, with X right, Y down, and Z forward. `reprojection_error_px` is a useful quality indicator; large values mean that the corresponding joint should not be trusted.
+
+Convert already saved 2D pose JSON files without opening the cameras:
+
+```powershell
+.\.venv\Scripts\python.exe stereo_pose.py reconstruct --input-dir outputs/pose_live --output-dir outputs/pose_3d --stereo-calibration outputs/stereo_calibration.npz --min-keypoint-conf 0.35
+```
+
+The reconstructed spine, pelvis, neck, head, hand, and foot entries are explicitly marked as `derived`, `wrist_proxy`, or `ankle_proxy`. A later SMPL fitting stage can replace these approximations with model-consistent joints and pose parameters.
