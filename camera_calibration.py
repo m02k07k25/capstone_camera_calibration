@@ -32,6 +32,9 @@ DEFAULT_CAPTURE_WIDTH = 1920
 DEFAULT_CAPTURE_HEIGHT = 1080
 DEFAULT_PREVIEW_WIDTH = 1600
 DEFAULT_PREVIEW_HEIGHT = 900
+DEFAULT_CAPTURE_INTERVAL = 4.0
+DEFAULT_STABLE_SECONDS = 2.0
+DEFAULT_STABILITY_PIXELS = 5.0
 BACKEND_CHOICES = ("auto", "dshow", "msmf")
 
 
@@ -335,11 +338,14 @@ def make_capture_display(
     corners: np.ndarray | None,
     label: str,
     saved: int,
+    status_detail: str | None = None,
 ) -> np.ndarray:
     display = frame.copy()
     if found and corners is not None:
         cv2.drawChessboardCorners(display, pattern_size, corners, found)
     status = "CORNER OK" if found else "MOVE CHESSBOARD"
+    if status_detail:
+        status = f"{status} | {status_detail}"
     cv2.putText(
         display,
         f"{label} | {status} | saved: {saved}",
@@ -365,6 +371,26 @@ def smooth_corners(
         current_weight * corners.astype(np.float32)
         + (1.0 - current_weight) * previous.astype(np.float32)
     ).astype(np.float32)
+
+
+def update_stability_reference(
+    found: bool,
+    corners: np.ndarray | None,
+    reference: np.ndarray | None,
+    max_motion_pixels: float,
+) -> tuple[np.ndarray | None, bool]:
+    """Track whether detected corners stayed near a fixed reference position."""
+    if not found or corners is None:
+        return None, False
+    if reference is None or reference.shape != corners.shape:
+        return corners.copy(), False
+
+    current_xy = corners.reshape(-1, 2).astype(np.float32)
+    reference_xy = reference.reshape(-1, 2).astype(np.float32)
+    displacement = np.linalg.norm(current_xy - reference_xy, axis=1)
+    if float(np.max(displacement)) > max_motion_pixels:
+        return corners.copy(), False
+    return reference, True
 
 
 def resize_preview(
@@ -446,6 +472,8 @@ def run_capture(args: argparse.Namespace) -> int:
     last_saved = -args.interval
     file_index = next_capture_index(output_dir)
     previous_corners: np.ndarray | None = None
+    stability_reference: np.ndarray | None = None
+    stable_since: float | None = None
     window_name = "Calibration Capture"
     cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
     window_initialized = False
@@ -453,7 +481,11 @@ def run_capture(args: argparse.Namespace) -> int:
         f"카메라 {args.camera} 연결됨 ({backend}), "
         f"해상도 {actual_size[0]}x{actual_size[1]}"
     )
-    print("스페이스 또는 S: 저장 / Q 또는 ESC: 종료")
+    print(
+        f"체커보드 코너가 {args.stable_seconds:g}초 동안 안정되면 저장 "
+        f"(저장 간격 최소 {args.interval:g}초) / "
+        "Q 또는 ESC: 종료"
+    )
     try:
         while True:
             ok, frame = capture.read()
@@ -462,10 +494,37 @@ def run_capture(args: argparse.Namespace) -> int:
 
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
             found, corners = find_chessboard_corners(gray, pattern_size)
+            now = time.monotonic()
+            previous_reference = stability_reference
+            stability_reference, motion_stable = update_stability_reference(
+                found,
+                corners,
+                stability_reference,
+                args.stability_pixels,
+            )
+            if not found or corners is None:
+                stable_since = None
+            elif previous_reference is None or not motion_stable:
+                stable_since = now
+            stable_elapsed = (
+                now - stable_since if stable_since is not None else 0.0
+            )
+            stability_ready = (
+                found
+                and corners is not None
+                and stable_since is not None
+                and stable_elapsed >= args.stable_seconds
+            )
             display_corners = None
             if found and corners is not None:
                 display_corners = smooth_corners(corners, previous_corners)
                 previous_corners = display_corners
+            status_detail = (
+                f"STABLE {min(stable_elapsed, args.stable_seconds):.1f}/"
+                f"{args.stable_seconds:g}s"
+                if found
+                else "WAIT CORNER"
+            )
             display = make_capture_display(
                 frame,
                 pattern_size,
@@ -473,6 +532,7 @@ def run_capture(args: argparse.Namespace) -> int:
                 display_corners,
                 f"CAMERA {args.camera}",
                 saved,
+                status_detail,
             )
             preview = resize_preview(
                 display,
@@ -484,11 +544,10 @@ def run_capture(args: argparse.Namespace) -> int:
                 window_initialized = True
             cv2.imshow(window_name, preview)
             key = cv2.waitKey(1) & 0xFF
-            now = time.monotonic()
 
             if key in (27, ord("q")):
                 break
-            if key in (32, ord("s")) and found and now - last_saved >= args.interval:
+            if stability_ready and now - last_saved >= args.interval:
                 output_path = output_dir / f"calibration_{file_index:03d}.png"
                 write_image(output_path, frame)
                 saved += 1
@@ -524,6 +583,9 @@ def run_capture_pair(args: argparse.Namespace) -> int:
     file_index = next_capture_index(output_a, output_b)
     previous_corners_a: np.ndarray | None = None
     previous_corners_b: np.ndarray | None = None
+    stability_reference_a: np.ndarray | None = None
+    stability_reference_b: np.ndarray | None = None
+    stable_since: float | None = None
     window_name = "Calibration Capture - Two Cameras"
     cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
     window_initialized = False
@@ -531,7 +593,11 @@ def run_capture_pair(args: argparse.Namespace) -> int:
         f"카메라 A={args.camera_a} ({backend_a}, {actual_a[0]}x{actual_a[1]}), "
         f"카메라 B={args.camera_b} ({backend_b}, {actual_b[0]}x{actual_b[1]})"
     )
-    print("두 카메라 모두 CORNER OK일 때 스페이스 또는 S: 쌍으로 저장 / Q 또는 ESC: 종료")
+    print(
+        f"두 카메라 코너가 모두 {args.stable_seconds:g}초 동안 안정되면 저장 "
+        f"(저장 간격 최소 {args.interval:g}초) / "
+        "Q 또는 ESC: 종료"
+    )
 
     try:
         while True:
@@ -550,6 +616,44 @@ def run_capture_pair(args: argparse.Namespace) -> int:
             gray_b = cv2.cvtColor(frame_b, cv2.COLOR_BGR2GRAY)
             found_a, corners_a = find_chessboard_corners(gray_a, pattern_size)
             found_b, corners_b = find_chessboard_corners(gray_b, pattern_size)
+            now = time.monotonic()
+            previous_reference_a = stability_reference_a
+            previous_reference_b = stability_reference_b
+            if found_a and corners_a is not None and found_b and corners_b is not None:
+                stability_reference_a, motion_stable_a = update_stability_reference(
+                    found_a,
+                    corners_a,
+                    stability_reference_a,
+                    args.stability_pixels,
+                )
+                stability_reference_b, motion_stable_b = update_stability_reference(
+                    found_b,
+                    corners_b,
+                    stability_reference_b,
+                    args.stability_pixels,
+                )
+                if (
+                    previous_reference_a is None
+                    or previous_reference_b is None
+                    or not motion_stable_a
+                    or not motion_stable_b
+                ):
+                    stable_since = now
+            else:
+                stability_reference_a = None
+                stability_reference_b = None
+                stable_since = None
+            stable_elapsed = (
+                now - stable_since if stable_since is not None else 0.0
+            )
+            stability_ready = (
+                found_a
+                and corners_a is not None
+                and found_b
+                and corners_b is not None
+                and stable_since is not None
+                and stable_elapsed >= args.stable_seconds
+            )
             display_corners_a = None
             display_corners_b = None
             if found_a and corners_a is not None:
@@ -558,6 +662,18 @@ def run_capture_pair(args: argparse.Namespace) -> int:
             if found_b and corners_b is not None:
                 display_corners_b = smooth_corners(corners_b, previous_corners_b)
                 previous_corners_b = display_corners_b
+            status_detail_a = (
+                f"STABLE {min(stable_elapsed, args.stable_seconds):.1f}/"
+                f"{args.stable_seconds:g}s"
+                if found_a
+                else "WAIT CORNER"
+            )
+            status_detail_b = (
+                f"STABLE {min(stable_elapsed, args.stable_seconds):.1f}/"
+                f"{args.stable_seconds:g}s"
+                if found_b
+                else "WAIT CORNER"
+            )
             display_a = make_capture_display(
                 frame_a,
                 pattern_size,
@@ -565,6 +681,7 @@ def run_capture_pair(args: argparse.Namespace) -> int:
                 display_corners_a,
                 f"CAMERA A ({args.camera_a})",
                 saved,
+                status_detail_a,
             )
             display_b = make_capture_display(
                 frame_b,
@@ -573,6 +690,7 @@ def run_capture_pair(args: argparse.Namespace) -> int:
                 display_corners_b,
                 f"CAMERA B ({args.camera_b})",
                 saved,
+                status_detail_b,
             )
             preview = resize_preview(
                 side_by_side(display_a, display_b),
@@ -584,14 +702,11 @@ def run_capture_pair(args: argparse.Namespace) -> int:
                 window_initialized = True
             cv2.imshow(window_name, preview)
             key = cv2.waitKey(1) & 0xFF
-            now = time.monotonic()
 
             if key in (27, ord("q")):
                 break
             if (
-                key in (32, ord("s"))
-                and found_a
-                and found_b
+                stability_ready
                 and now - last_saved >= args.interval
             ):
                 output_path_a = output_a / f"calibration_{file_index:03d}.png"
@@ -717,6 +832,113 @@ def run_calibration(args: argparse.Namespace) -> int:
     return 0
 
 
+def reverse_chessboard_corner_order(
+    corners: np.ndarray,
+    pattern_size: tuple[int, int],
+) -> np.ndarray:
+    """Return the same grid with its 180-degree corner ordering reversed."""
+    columns, rows = pattern_size
+    expected_count = columns * rows
+    if corners.shape[0] != expected_count:
+        raise ValueError(
+            f"체커보드 코너 수가 패턴과 다릅니다: "
+            f"{corners.shape[0]} != {expected_count}"
+        )
+    original_shape = corners.shape
+    grid = np.asarray(corners).reshape(rows, columns, 2)
+    return grid[::-1, ::-1].reshape(original_shape).copy()
+
+
+def resolve_stereo_corner_orders(
+    object_points: list[np.ndarray],
+    image_points_a: list[np.ndarray],
+    image_points_b: list[np.ndarray],
+    pair_names: list[str],
+    camera_matrix_a: np.ndarray,
+    distortion_a: np.ndarray,
+    camera_matrix_b: np.ndarray,
+    distortion_b: np.ndarray,
+    image_size: tuple[int, int],
+    pattern_size: tuple[int, int],
+    criteria: tuple[int, int, float],
+) -> tuple[list[np.ndarray], list[str]]:
+    """Resolve the chessboard's 180-degree ordering ambiguity per image pair."""
+    raw_points_b = [points.copy() for points in image_points_b]
+    corrected_points_b = [points.copy() for points in image_points_b]
+    reversed_flags = [False] * len(image_points_b)
+
+    def point_rms(projected: np.ndarray, detected: np.ndarray) -> float:
+        delta = projected.reshape(-1, 2) - detected.reshape(-1, 2)
+        return float(np.sqrt(np.mean(np.sum(delta * delta, axis=1))))
+
+    for _ in range(5):
+        calibration = cv2.stereoCalibrate(
+            object_points,
+            image_points_a,
+            corrected_points_b,
+            camera_matrix_a,
+            distortion_a,
+            camera_matrix_b,
+            distortion_b,
+            image_size,
+            criteria=criteria,
+            flags=cv2.CALIB_FIX_INTRINSIC,
+        )
+        rotation = calibration[5]
+        translation = calibration[6]
+        changed = False
+
+        for index, (obj, corners_a, raw_corners_b) in enumerate(
+            zip(object_points, image_points_a, raw_points_b)
+        ):
+            try:
+                ok, rvec_a, tvec_a = cv2.solvePnP(
+                    obj,
+                    corners_a,
+                    camera_matrix_a,
+                    distortion_a,
+                    flags=cv2.SOLVEPNP_ITERATIVE,
+                )
+            except cv2.error:
+                continue
+            if not ok:
+                continue
+
+            rotation_a, _ = cv2.Rodrigues(rvec_a)
+            rotation_b = rotation @ rotation_a
+            translation_b = rotation @ tvec_a + translation
+            rvec_b, _ = cv2.Rodrigues(rotation_b)
+            projected_b, _ = cv2.projectPoints(
+                obj,
+                rvec_b,
+                translation_b,
+                camera_matrix_b,
+                distortion_b,
+            )
+            reversed_corners_b = reverse_chessboard_corner_order(
+                raw_corners_b,
+                pattern_size,
+            )
+            same_error = point_rms(projected_b, raw_corners_b)
+            reversed_error = point_rms(projected_b, reversed_corners_b)
+            should_reverse = reversed_error < same_error * 0.8
+
+            if should_reverse != reversed_flags[index]:
+                reversed_flags[index] = should_reverse
+                corrected_points_b[index] = (
+                    reversed_corners_b if should_reverse else raw_corners_b.copy()
+                )
+                changed = True
+
+        if not changed:
+            break
+
+    reordered_pairs = [
+        name for name, is_reversed in zip(pair_names, reversed_flags) if is_reversed
+    ]
+    return corrected_points_b, reordered_pairs
+
+
 def save_stereo_calibration(
     output_path: Path,
     camera_matrix_a: np.ndarray,
@@ -738,6 +960,7 @@ def save_stereo_calibration(
     disparity_to_depth: np.ndarray,
     used_pairs: list[str],
     excluded_pairs: list[str],
+    reordered_pairs: list[str] | None = None,
 ) -> tuple[Path, Path]:
     if output_path.suffix.lower() != ".npz":
         output_path = output_path.with_suffix(".npz")
@@ -775,6 +998,7 @@ def save_stereo_calibration(
         "baseline_in_square_units": float(np.linalg.norm(translation)),
         "used_pairs": used_pairs,
         "excluded_pairs": excluded_pairs,
+        "reordered_corner_pairs": reordered_pairs or [],
         "rotation": rotation.tolist(),
         "translation": translation.reshape(-1).tolist(),
     }
@@ -885,6 +1109,21 @@ def run_stereo_calibration(args: argparse.Namespace) -> int:
         100,
         1e-6,
     )
+    image_points_b, reordered_pairs = resolve_stereo_corner_orders(
+        object_points,
+        image_points_a,
+        image_points_b,
+        used_pairs,
+        camera_matrix_a,
+        distortion_a,
+        camera_matrix_b,
+        distortion_b,
+        image_size,
+        pattern_size,
+        criteria,
+    )
+    if reordered_pairs:
+        print("코너 순서 자동 보정: " + ", ".join(reordered_pairs))
     flags = cv2.CALIB_FIX_INTRINSIC
     rms_error, _, _, _, _, rotation, translation, essential, fundamental = (
         cv2.stereoCalibrate(
@@ -938,6 +1177,7 @@ def run_stereo_calibration(args: argparse.Namespace) -> int:
         disparity_to_depth,
         used_pairs,
         excluded_pairs,
+        reordered_pairs,
     )
 
     print(f"\n스테레오 캘리브레이션 완료: {len(used_pairs)}쌍")
@@ -1003,7 +1243,24 @@ def build_parser() -> argparse.ArgumentParser:
     capture.add_argument("--height", type=nonnegative_int, default=DEFAULT_CAPTURE_HEIGHT)
     capture.add_argument("--preview-width", type=positive_int, default=DEFAULT_PREVIEW_WIDTH)
     capture.add_argument("--preview-height", type=positive_int, default=DEFAULT_PREVIEW_HEIGHT)
-    capture.add_argument("--interval", type=positive_float, default=0.5)
+    capture.add_argument(
+        "--interval",
+        type=positive_float,
+        default=DEFAULT_CAPTURE_INTERVAL,
+        help="체커보드 인식 상태에서 자동 저장하는 간격(초)",
+    )
+    capture.add_argument(
+        "--stable-seconds",
+        type=positive_float,
+        default=DEFAULT_STABLE_SECONDS,
+        help="저장 전에 코너 위치가 안정되어 있어야 하는 시간(초)",
+    )
+    capture.add_argument(
+        "--stability-pixels",
+        type=positive_float,
+        default=DEFAULT_STABILITY_PIXELS,
+        help="안정 상태로 인정할 내부 코너 최대 이동 거리(픽셀)",
+    )
     capture.set_defaults(handler=run_capture)
 
     capture_pair = subparsers.add_parser(
@@ -1039,7 +1296,24 @@ def build_parser() -> argparse.ArgumentParser:
         default=DEFAULT_PREVIEW_HEIGHT,
         help="모니터링 창의 최대 세로 크기",
     )
-    capture_pair.add_argument("--interval", type=positive_float, default=0.5)
+    capture_pair.add_argument(
+        "--interval",
+        type=positive_float,
+        default=DEFAULT_CAPTURE_INTERVAL,
+        help="두 카메라 모두 체커보드가 인식된 상태에서 자동 저장하는 간격(초)",
+    )
+    capture_pair.add_argument(
+        "--stable-seconds",
+        type=positive_float,
+        default=DEFAULT_STABLE_SECONDS,
+        help="저장 전에 양쪽 코너 위치가 안정되어 있어야 하는 시간(초)",
+    )
+    capture_pair.add_argument(
+        "--stability-pixels",
+        type=positive_float,
+        default=DEFAULT_STABILITY_PIXELS,
+        help="안정 상태로 인정할 내부 코너 최대 이동 거리(픽셀)",
+    )
     capture_pair.set_defaults(handler=run_capture_pair)
 
     calibrate = subparsers.add_parser("calibrate", help="이미지로 카메라 캘리브레이션")

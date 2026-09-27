@@ -661,7 +661,10 @@ def render_smpl_panel(
     center = np.median(values, axis=0)
     centered = values - center
     projected_x = centered[:, 0] + 0.35 * centered[:, 2]
-    projected_y = -centered[:, 1]
+    # Triangulation uses OpenCV's camera coordinates: +Y points down in the
+    # rectified image.  The panel is also a raster image whose +Y points down,
+    # so negating this coordinate would turn the person upside down.
+    projected_y = centered[:, 1]
     span_x = max(float(np.ptp(projected_x)), 200.0)
     span_y = max(float(np.ptp(projected_y)), 300.0)
     scale = min((width - 50) / span_x, (height - 100) / span_y) * 0.82
@@ -669,7 +672,7 @@ def render_smpl_panel(
     for name, value in points.items():
         relative = value - center
         view_x = relative[0] + 0.35 * relative[2]
-        view_y = -relative[1]
+        view_y = relative[1]
         screen[name] = (
             int(round(width / 2 + view_x * scale)),
             int(round(70 + height / 2 + view_y * scale)),

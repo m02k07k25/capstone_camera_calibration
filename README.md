@@ -70,12 +70,14 @@ NVIDIA GPU를 사용하는 경우에는 기본 의존성 설치 후 CUDA용 PyTo
 두 카메라가 각각 0번과 1번으로 잡히는 경우:
 
 ```powershell
-.\.venv\Scripts\python.exe camera_calibration.py capture-pair --camera-a 0 --camera-b 1 --backend dshow --cols 9 --rows 6 --width 1920 --height 1080 --preview-width 1400 --preview-height 700 --interval 0.5
+.\.venv\Scripts\python.exe camera_calibration.py capture-pair --camera-a 0 --camera-b 1 --backend dshow --cols 9 --rows 6 --width 1920 --height 1080 --preview-width 1400 --preview-height 700
 ```
 
-미리보기에서 양쪽 모두 `CORNER OK`가 된 상태로 체커보드의 위치와 각도를 바꾸며 스페이스 또는 `S`를 누릅니다. 두 장의 이미지는 같은 번호로 다음 위치에 저장됩니다.
+미리보기에서 양쪽 모두 `CORNER OK`가 된 뒤 내부 코너 위치가 기본 5픽셀 이내로 2초 동안 유지되면 두 카메라 이미지가 한 쌍 저장됩니다. 이후에도 인식과 안정 상태가 유지되는 동안 최소 4초 간격으로 자동 저장됩니다. 미리보기의 `STABLE 1.4/2s` 표시가 `2.0/2s`가 되면 저장 조건을 만족한 것입니다. 판을 들고 위치·거리·각도를 바꾼 뒤 잠깐 멈추면 됩니다. 간격은 `--interval 6`, 안정화 시간은 `--stable-seconds 3`, 이동 허용치는 `--stability-pixels 5`처럼 바꿀 수 있습니다. 두 장의 이미지는 같은 번호로 저장됩니다.
 
-이 모드는 두 카메라를 먼저 프레임 획득한 뒤 디코딩해 같은 체커보드 자세의 이미지 쌍을 만들도록 합니다. USB 카메라의 하드웨어 트리거 동기화는 아니므로, 저장을 누를 때 체커보드를 잠시 멈추세요.
+이 모드는 두 카메라를 먼저 프레임 획득한 뒤 디코딩해 같은 체커보드 자세의 이미지 쌍을 만들도록 합니다. USB 카메라의 하드웨어 트리거 동기화는 아니므로, 자동 저장 순간에는 체커보드를 잠시 멈추세요.
+
+참고로 검출기는 체커보드의 바깥 테두리 꼭짓점이 아니라 지정한 내부 코너(기본 `9 x 6`, 총 54개)를 찾습니다. 바깥 테두리나 끝의 검은/흰 칸 일부가 살짝 가려진 것은 인식될 수 있지만, 내부 코너가 하나라도 가려지면 해당 프레임은 저장되지 않거나 캘리브레이션 품질이 떨어질 수 있습니다. 두 카메라를 함께 촬영할 때는 양쪽 영상에서 내부 코너가 모두 보여야 합니다.
 
 ```text
 data/calibration/camera_0/
@@ -86,7 +88,7 @@ data/calibration/camera_1/
 
 기존 촬영 파일이 있으면 다음 번호부터 자동으로 이어서 저장하므로, 추가 촬영을 해도 기존 이미지가 덮어써지지 않습니다.
 
-두 번째 카메라가 아직 인덱스 1로 열리지 않거나 카메라별로 따로 촬영해야 하면 다음처럼 실행합니다.
+두 번째 카메라가 아직 인덱스 1로 열리지 않거나 카메라별로 따로 촬영해야 하면 다음처럼 실행합니다. 이 경우에도 코너가 2초 동안 안정된 뒤 기본 4초 간격으로 자동 저장됩니다.
 
 ```powershell
 .\.venv\Scripts\python.exe camera_calibration.py capture --camera 0 --output-dir data/calibration/camera_0 --cols 9 --rows 6 --width 1920 --height 1080
@@ -115,6 +117,8 @@ data/calibration/camera_1/
 ```powershell
 .\.venv\Scripts\python.exe camera_calibration.py stereo-calibrate --input-a data/calibration/camera_0 --input-b data/calibration/camera_1 --calibration-a outputs/camera_0_calibration.npz --calibration-b outputs/camera_1_calibration.npz --cols 9 --rows 6 --square-size 25 --output outputs/stereo_calibration.npz
 ```
+
+일반 체커보드는 180도 회전 대칭이라 두 카메라에서 내부 코너의 시작점이 반대로 검출될 수 있습니다. 스테레오 보정은 이 코너 순서를 쌍별로 자동 비교해 보정하고, 자동 보정한 파일 목록을 `.json`의 `reordered_corner_pairs`에 기록합니다.
 
 두 카메라가 서로 다른 순간의 보드를 저장한 쌍은 다음처럼 제외할 수 있습니다. 여러 파일은 쉼표로 구분합니다.
 
