@@ -1,187 +1,154 @@
 # Capstone Camera Calibration
 
-캡스톤 프로젝트에서 사용할 수 있는 체스보드 기반 카메라 캘리브레이션 도구입니다.
-웹캠으로 체스보드 이미지를 촬영하거나 기존 이미지를 사용해 다음 작업을 수행합니다.
+캡스톤 프로젝트용 ChArUco 카메라 보정과 스테레오 3D 관절 수집 도구입니다. 카메라 보정, 2D 관절 검출, 3D 재구성 코드는 각각 calibration, pose_estimation.py, pose3d 모듈에 나뉘어 있습니다.
 
-- 카메라 행렬 `K` 계산
-- 렌즈 왜곡 계수 계산
-- RMS 및 평균 재투영 오차 계산
-- 코너 검출 확인 이미지 저장
-- 왜곡 보정 이미지 생성
+## 입출력 한눈에 보기
+
+| 단계 | 입력 | 출력 |
+|---|---|---|
+| 보드 생성 | 보드 규격 옵션 | A4 인쇄용 SVG 네 장 |
+| 보정 촬영 | 카메라 영상과 ChArUco 보드 | 카메라별 PNG 또는 같은 번호의 이미지 쌍 |
+| 단안 보정 | 한 카메라의 보정 이미지 | 카메라 내부 파라미터 NPZ, 오차와 설정 JSON |
+| 스테레오 보정 | 양쪽 보정 이미지, 두 단안 결과 | 카메라 사이 파라미터 NPZ와 요약 JSON |
+| 2D 이미지 추론 | 이미지, YOLO 포즈 모델 | 관절이 표시된 이미지와 픽셀 좌표 JSON |
+| 2D 실시간 추론 | 카메라 두 대, YOLO 포즈 모델 | S 키를 누를 때 2D JSON과 표시 이미지 |
+| 3D 실시간 수집 | 카메라 두 대, YOLO 모델, 스테레오 보정 NPZ | 유효한 프레임의 3D 관절 JSON, 선택적 원본 JPEG |
+| 저장된 2D에서 3D 생성 | pose_live의 2D JSON, 스테레오 보정 NPZ | 별도 타임스탬프 세션과 3D 관절 JSON |
+
+경로는 프로젝트 루트 기준입니다. 보정 이미지와 결과물은 로컬에서 생성하며 Git에는 포함하지 않습니다. YOLO 모델 파일도 별도로 준비해야 합니다.
 
 ## 프로젝트 구조
 
-```text
-capstone_camera_calibration/
-├─ camera_calibration.py
-├─ pose_estimation.py
-├─ requirements.txt
-├─ data/
-│  └─ calibration/       # 체스보드 촬영 이미지
-├─ outputs/              # 캘리브레이션 결과와 보정 이미지
-├─ models/
-│  └─ yolo26n-pose.pt  # 사전학습 HPE 가중치
-└─ .gitignore
-```
+    capstone_camera_calibration/
+    ├─ camera_calibration.py       보정 명령 진입점
+    ├─ calibration/                보드, 카메라, 촬영, 단안·스테레오 보정
+    ├─ pose_estimation.py          2D 관절 추론
+    ├─ stereo_pose.py              3D 수집·재구성 명령 진입점
+    ├─ pose3d/                     삼각측량, 관절 매핑, 저장, 미리보기
+    ├─ data/charuco_board_a4/      A4 인쇄용 보드 SVG 네 장
+    ├─ data/calibration/           보정 촬영 이미지 (로컬 생성)
+    ├─ outputs/                    보정 결과와 관절 데이터 (로컬 생성)
+    ├─ models/yolo26n-pose.pt      YOLO 포즈 모델 (별도 준비)
+    └─ requirements.txt            Python 의존성
 
 ## 설치
 
-프로젝트 전용 가상환경을 만들고 의존성을 설치합니다.
+    python -m venv .venv
+    .\.venv\Scripts\python.exe -m pip install -r requirements.txt
 
-```powershell
-python -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -r requirements.txt
-```
+OpenCV의 ArUco 기능을 사용합니다. opencv-python과 opencv-contrib-python은 같은 cv2 모듈을 제공하므로 한 가상환경에 둘 다 설치하지 마세요.
 
-NVIDIA GPU를 사용하는 경우에는 기본 의존성 설치 후 CUDA용 PyTorch를 별도로 설치합니다. 현재 RTX 3070 환경에서는 다음 명령을 사용합니다.
+    .\.venv\Scripts\python.exe -c "import cv2; print(cv2.__version__); print(hasattr(cv2, 'aruco'))"
 
-```powershell
-.\.venv\Scripts\python.exe -m pip install --upgrade --force-reinstall --no-deps torch==2.14.0+cu130 torchvision==0.29.0+cu130 --index-url https://download.pytorch.org/whl/cu130
-```
+NVIDIA GPU를 사용하는 경우 의존성 설치 후 CUDA용 PyTorch를 설치합니다. 아래 명령은 이 프로젝트에서 사용한 RTX 3070 환경 예시입니다.
 
-확인 명령에서 `cuda_available=True`와 `NVIDIA GeForce RTX 3070`이 표시되어야 합니다.
+    .\.venv\Scripts\python.exe -m pip install --upgrade --force-reinstall --no-deps torch==2.14.0+cu130 torchvision==0.29.0+cu130 --index-url https://download.pytorch.org/whl/cu130
 
-```powershell
-.\.venv\Scripts\python.exe -c "import torch; print(torch.__version__); print(torch.cuda.is_available()); print(torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'CPU')"
-```
+    .\.venv\Scripts\python.exe -c "import torch; print(torch.__version__); print(torch.cuda.is_available()); print(torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'CPU')"
 
-## 체커보드 규격
+## 1. A4 ChArUco 보드 준비
 
-현재 사용하는 보드가 가로 10칸 × 세로 7칸이고 한 칸이 25 mm라면, OpenCV에 입력하는 내부 코너 수는 가로 9 × 세로 6입니다.
+기본 보드는 가로 10칸, 세로 7칸이며 한 칸은 40 mm, 마커는 28 mm입니다. 전체 보드 크기는 400 × 280 mm이고 내부 코너는 9 × 6개입니다. 각 마커의 ID로 위치와 방향을 구분하므로 체커보드의 좌우·180도 반전 대응 문제를 피할 수 있습니다.
 
-```text
-실제 칸 수:       10 × 7
-내부 교차점 수:    9 × 6  ← OpenCV --cols/--rows
-한 칸 크기:       25.0 mm
-```
+    .\.venv\Scripts\python.exe camera_calibration.py generate-board --output-dir data/charuco_board_a4
 
-보드에 표시된 숫자가 “칸 수”가 아니라 “내부 교차점 수”라면 그때만 `--cols 10 --rows 7`로 바꿉니다.
+data/charuco_board_a4에 A4 가로 SVG 네 장이 생성됩니다. A1/A2는 위쪽 3행, B1/B2는 아래쪽 4행입니다. 각 페이지를 실제 크기 100%로 인쇄하고 페이지 맞춤/축소를 끕니다. 100 mm 확인선을 자로 확인한 뒤 A1 A2 / B1 B2 순서로 이어 붙여 평평하고 단단한 판에 부착합니다.
 
-## 1. 연결된 카메라 확인
+보드 규격을 바꾸면 생성, 촬영, 단안 보정, 스테레오 보정 명령에 같은 cols, rows, square-size, marker-size, dictionary 값을 사용해야 합니다. 기존 체커보드 이미지는 이 ChArUco 검출기로 사용할 수 없으므로 새 보드로 다시 촬영하세요.
 
-```powershell
-.\.venv\Scripts\python.exe camera_calibration.py scan --max-index 5 --width 1920 --height 1080
-```
+## 2. 카메라 보정 이미지 수집
 
-`[0] 사용 가능`, `[1] 사용 가능`처럼 표시되는 번호를 촬영 명령의 카메라 번호로 사용합니다. Windows에서 카메라 앱이나 다른 프로그램이 장치를 점유하고 있으면 먼저 종료합니다.
+카메라 인덱스를 확인합니다.
 
-## 2. 두 카메라로 체커보드 촬영
+    .\.venv\Scripts\python.exe camera_calibration.py scan --max-index 5 --width 1920 --height 1080
 
-두 카메라가 각각 0번과 1번으로 잡히는 경우:
+두 카메라가 0번과 1번이면 다음 명령으로 쌍을 촬영합니다.
 
-```powershell
-.\.venv\Scripts\python.exe camera_calibration.py capture-pair --camera-a 0 --camera-b 1 --backend dshow --cols 9 --rows 6 --width 1920 --height 1080 --preview-width 1400 --preview-height 700
-```
+    .\.venv\Scripts\python.exe camera_calibration.py capture-pair --camera-a 0 --camera-b 1 --backend dshow --cols 10 --rows 7 --square-size 40 --marker-size 28 --dictionary DICT_5X5_100 --width 1920 --height 1080 --preview-width 1400 --preview-height 700
 
-미리보기에서 양쪽 모두 `CORNER OK`가 된 뒤 내부 코너 위치가 기본 5픽셀 이내로 2초 동안 유지되면 두 카메라 이미지가 한 쌍 저장됩니다. 이후에도 인식과 안정 상태가 유지되는 동안 최소 4초 간격으로 자동 저장됩니다. 미리보기의 `STABLE 1.4/2s` 표시가 `2.0/2s`가 되면 저장 조건을 만족한 것입니다. 판을 들고 위치·거리·각도를 바꾼 뒤 잠깐 멈추면 됩니다. 간격은 `--interval 6`, 안정화 시간은 `--stable-seconds 3`, 이동 허용치는 `--stability-pixels 5`처럼 바꿀 수 있습니다. 두 장의 이미지는 같은 번호로 저장됩니다.
+양쪽 영상에 같은 코너 ID가 8개 이상 잡히고 보드가 2초간 안정되면 이미지 한 쌍을 저장합니다. 기본 저장 간격은 4초입니다. 보드를 여러 위치·거리·기울기로 옮기고 저장 순간에는 잠시 멈춥니다. Q 또는 ESC를 눌러 종료합니다.
 
-이 모드는 두 카메라를 먼저 프레임 획득한 뒤 디코딩해 같은 체커보드 자세의 이미지 쌍을 만들도록 합니다. USB 카메라의 하드웨어 트리거 동기화는 아니므로, 자동 저장 순간에는 체커보드를 잠시 멈추세요.
+    data/calibration/camera_0/calibration_000.png
+    data/calibration/camera_1/calibration_000.png
 
-참고로 검출기는 체커보드의 바깥 테두리 꼭짓점이 아니라 지정한 내부 코너(기본 `9 x 6`, 총 54개)를 찾습니다. 바깥 테두리나 끝의 검은/흰 칸 일부가 살짝 가려진 것은 인식될 수 있지만, 내부 코너가 하나라도 가려지면 해당 프레임은 저장되지 않거나 캘리브레이션 품질이 떨어질 수 있습니다. 두 카메라를 함께 촬영할 때는 양쪽 영상에서 내부 코너가 모두 보여야 합니다.
+같은 번호의 두 파일은 한 쌍입니다. 두 카메라의 프레임은 연속으로 가져오며 하드웨어 트리거로 동기화하지 않습니다. 단안 보정 이미지만 따로 촬영할 때는 capture 명령을 사용합니다. 스테레오 보정에는 양쪽에서 같은 보드 자세를 찍은 쌍이 필요하므로 capture-pair를 권장합니다.
 
-```text
-data/calibration/camera_0/
-data/calibration/camera_1/
-```
+## 3. 단안 카메라 보정
 
-`Q` 또는 `ESC`로 종료합니다. 해상도를 카메라가 지원하지 않으면 실제 지원 해상도로 자동 적용됩니다. 모든 촬영 이미지는 카메라별로 같은 해상도여야 합니다.
+카메라별로 서로 다른 위치·거리·기울기의 이미지 15~20장 이상을 준비하고 각각 보정합니다.
 
-기존 촬영 파일이 있으면 다음 번호부터 자동으로 이어서 저장하므로, 추가 촬영을 해도 기존 이미지가 덮어써지지 않습니다.
+    .\.venv\Scripts\python.exe camera_calibration.py calibrate --input-dir data/calibration/camera_0 --output outputs/camera_0_calibration.npz --corners-dir outputs/camera_0_corners --preview-dir outputs/camera_0_undistorted
 
-두 번째 카메라가 아직 인덱스 1로 열리지 않거나 카메라별로 따로 촬영해야 하면 다음처럼 실행합니다. 이 경우에도 코너가 2초 동안 안정된 뒤 기본 4초 간격으로 자동 저장됩니다.
+    .\.venv\Scripts\python.exe camera_calibration.py calibrate --input-dir data/calibration/camera_1 --output outputs/camera_1_calibration.npz --corners-dir outputs/camera_1_corners --preview-dir outputs/camera_1_undistorted
 
-```powershell
-.\.venv\Scripts\python.exe camera_calibration.py capture --camera 0 --output-dir data/calibration/camera_0 --cols 9 --rows 6 --width 1920 --height 1080
+각 NPZ에는 카메라 행렬, 렌즈 왜곡 계수, 이미지 해상도와 보드 설정이 저장됩니다. 같은 이름의 JSON에는 재투영 오차와 사용 이미지 목록이 기록됩니다. 코너 검출 이미지와 왜곡 보정 미리보기는 지정한 폴더에 저장됩니다. square-size 단위는 이동 벡터에도 사용되므로 이 프로젝트의 기본 단위인 mm를 유지하세요.
 
-.\.venv\Scripts\python.exe camera_calibration.py capture --camera 1 --output-dir data/calibration/camera_1 --cols 9 --rows 6 --width 1920 --height 1080
-```
+## 4. 스테레오 보정
 
-## 3. 카메라별 캘리브레이션
+같은 번호의 이미지 쌍과 두 단안 보정 결과로 카메라 사이의 회전·이동 및 영상 정렬 파라미터를 계산합니다.
 
-각 카메라에서 최소 15~20장 이상, 서로 다른 위치·거리·기울기로 촬영한 뒤 각각 실행합니다.
+    .\.venv\Scripts\python.exe camera_calibration.py stereo-calibrate --input-a data/calibration/camera_0 --input-b data/calibration/camera_1 --calibration-a outputs/camera_0_calibration.npz --calibration-b outputs/camera_1_calibration.npz --output outputs/stereo_calibration.npz
 
-```powershell
-.\.venv\Scripts\python.exe camera_calibration.py calibrate --input-dir data/calibration/camera_0 --cols 9 --rows 6 --square-size 25 --output outputs/camera_0_calibration.npz --corners-dir outputs/camera_0_corners --preview-dir outputs/camera_0_undistorted
+출력 NPZ에는 R/T, E/F, rectification, Q 행렬이 저장되고 같은 이름의 JSON에는 오차와 이미지 쌍별 공통 코너 수가 기록됩니다. R/T의 거리 단위는 square-size 입력 단위인 mm입니다. 스테레오 RMS가 기본 기준 5 px보다 크면 결과를 저장하지 않습니다. 보드의 움직임, 흐림, 인쇄 크기, 이미지 해상도와 보드 규격을 확인하고 다시 촬영하세요. ChArUco ID는 코너 대응 순서 문제를 줄여 주지만 촬영 품질 문제까지 보정하지는 않습니다.
 
-.\.venv\Scripts\python.exe camera_calibration.py calibrate --input-dir data/calibration/camera_1 --cols 9 --rows 6 --square-size 25 --output outputs/camera_1_calibration.npz --corners-dir outputs/camera_1_corners --preview-dir outputs/camera_1_undistorted
-```
+## 5. 왜곡 보정과 2D 관절 검출
 
-결과는 카메라별 `.npz`와 `.json`, 검출 코너 이미지, 왜곡 보정 미리보기로 저장됩니다.
+한 장의 이미지를 보정하려면 다음처럼 실행합니다.
 
-`square-size`의 단위는 이동 벡터의 단위가 되므로 실제 측정 단위인 mm를 계속 사용하면 됩니다.
+    .\.venv\Scripts\python.exe camera_calibration.py undistort --calibration outputs/camera_0_calibration.npz --input input.jpg --output outputs/undistorted.jpg
 
-## 4. 스테레오 캘리브레이션
+2D 관절 검출에는 models/yolo26n-pose.pt 모델이 필요합니다. 이미지 추론은 관절 표시 이미지와 같은 파일명의 JSON을 출력합니다. 관절 x/y는 이미지 픽셀이고 confidence는 모델 신뢰도입니다.
 
-두 카메라의 같은 번호 이미지 쌍을 사용해 카메라 사이의 회전·이동과 영상 정렬 파라미터를 계산합니다. 3D 관절 좌표를 만들기 전에 실행해야 합니다.
+    .\.venv\Scripts\python.exe pose_estimation.py image --model models/yolo26n-pose.pt --input input.jpg --output outputs/pose_test.png --imgsz 640 --conf 0.35
 
-```powershell
-.\.venv\Scripts\python.exe camera_calibration.py stereo-calibrate --input-a data/calibration/camera_0 --input-b data/calibration/camera_1 --calibration-a outputs/camera_0_calibration.npz --calibration-b outputs/camera_1_calibration.npz --cols 9 --rows 6 --square-size 25 --output outputs/stereo_calibration.npz
-```
+두 카메라 실시간 2D 추론은 다음과 같습니다. S를 누르면 outputs/pose_live에 pose_NNN.json, pose_NNN_camera_a.png, pose_NNN_camera_b.png가 저장됩니다. JSON에는 저장 시각(timestamp, Unix 초), 두 영상 크기, COCO-17 2D 키포인트의 픽셀 좌표와 confidence가 들어 있습니다.
 
-일반 체커보드는 180도 회전 대칭이라 두 카메라에서 내부 코너의 시작점이 반대로 검출될 수 있습니다. 스테레오 보정은 이 코너 순서를 쌍별로 자동 비교해 보정하고, 자동 보정한 파일 목록을 `.json`의 `reordered_corner_pairs`에 기록합니다.
+    .\.venv\Scripts\python.exe pose_estimation.py live --model models/yolo26n-pose.pt --camera-a 0 --camera-b 1 --backend dshow --width 1920 --height 1080 --preview-width 1400 --preview-height 700 --imgsz 640 --conf 0.35 --device 0
 
-두 카메라가 서로 다른 순간의 보드를 저장한 쌍은 다음처럼 제외할 수 있습니다. 여러 파일은 쉼표로 구분합니다.
+Q 또는 ESC로 종료합니다. 기본 출력 폴더는 outputs/pose_live입니다.
 
-```powershell
-.\.venv\Scripts\python.exe camera_calibration.py stereo-calibrate --input-a data/calibration/camera_0 --input-b data/calibration/camera_1 --calibration-a outputs/camera_0_calibration.npz --calibration-b outputs/camera_1_calibration.npz --cols 9 --rows 6 --square-size 25 --exclude-pairs calibration_011.png,calibration_019.png --output outputs/stereo_calibration.npz
-```
+## 6. 실시간 3D 관절 저장
 
-스테레오 rectification의 기본 alpha는 -1이며, 왜곡이 큰 카메라에서도 과도한 확대를 피하도록 설정되어 있습니다.
+스테레오 보정 결과와 카메라 두 대로 실행합니다.
 
-결과:
+    .\.venv\Scripts\python.exe stereo_pose.py live --model models/yolo26n-pose.pt --stereo-calibration outputs/stereo_calibration.npz --camera-a 0 --camera-b 1 --backend dshow --width 1920 --height 1080 --preview-width 1600 --preview-height 700 --imgsz 640 --conf 0.35 --device 0
 
-- `outputs/stereo_calibration.npz`: 두 카메라의 R/T, E/F, rectification, Q 행렬
-- `outputs/stereo_calibration.json`: RMS 오차와 카메라 사이 거리 요약
+저장은 자동입니다. 원시 삼각측량 결과에서 유효한 COCO 관절이 기본 6개 이상인 프레임을 처리 직후 JSON으로 씁니다. 기본 --save-interval 0은 유효한 모든 프레임을 저장합니다. 예를 들어 --save-interval 0.1은 초당 최대 약 10개로 제한합니다. Q 또는 ESC로 종료합니다. 기본적으로 JSON만 저장합니다. 카메라 원본 JPEG도 보관하려면 명령에 --save-images 옵션을 추가하세요.
 
-스테레오 RMS 오차가 기본 기준인 5 px보다 크면 결과 파일을 저장하지 않습니다. 이 경우 체커보드를 더 넓은 위치·거리·기울기로 움직이고, 저장 순간에는 잠시 멈춰서 다시 촬영합니다.
+한 사람을 각 카메라에서 독립적으로 검출해 대응시키므로 수집 중에는 한 사람만 화면에 두는 것을 권장합니다. 카메라 해상도는 스테레오 보정 당시 해상도와 같아야 합니다.
 
-## 5. 단일 이미지 보정
+각 실행은 outputs/pose_3d 아래에 새 UTC 타임스탬프 폴더를 만듭니다.
 
-```powershell
-.\.venv\Scripts\python.exe camera_calibration.py undistort --calibration outputs/camera_0_calibration.npz --input input.jpg --output outputs/undistorted.jpg
-```
+    outputs/pose_3d/20261001T123456.123456789Z/
+    ├─ session.json
+    ├─ frames/
+    │  └─ frame_000000_20261001T123456.123456789Z.json
+    └─ images/                         save-images를 준 경우에만 생성
+       ├─ camera_a/frame_000000.jpg
+       └─ camera_b/frame_000000.jpg
 
-재투영 오차는 작을수록 일반적으로 좋습니다. 캘리브레이션 후에는 `outputs/corners`에 저장된 코너 검출 결과와 `.json`의 오차를 함께 확인하세요.
+session.json에는 모델, 카메라, 보정 파일, 저장 조건 등 세션 설정이 기록됩니다. 각 frames JSON에는 해당 프레임의 카메라별 2D 검출, 원시 3D COCO-17 관절(coco17_3d), 필터링한 관절(coco17_3d_filtered), SMPL 이름 순서의 24개 XYZ 위치(smpl_body_24와 smpl_body_24_filtered)가 담깁니다. JSON은 매 프레임 디스크에 기록되므로 수집 중에도 파일이 누적됩니다. 학습에는 원시 필드를 사용하고, 필터링 필드에는 흔들림 완화나 짧은 결측 구간 유지가 반영될 수 있습니다.
 
-## 6. HPE 2D 관절 검출
+좌표 단위는 mm입니다. 원점은 rectified camera A의 광학 중심이며 X는 영상 오른쪽, Y는 아래쪽, Z는 카메라 앞쪽입니다. 각 3D COCO 관절에는 xyz_mm, valid, confidence, reprojection_error_px가 들어갑니다. SMPL BODY 24개는 smpl_body_24 배열에 이름 순서대로 들어가며 각 항목에 name, xyz_mm, source가 기록됩니다. 관측하지 않은 값은 null입니다. source가 direct가 아닌 관절은 COCO 관절에서 계산한 중간점 또는 proxy 값일 수 있습니다.
 
-Ultralytics YOLO26 nano pose 모델을 사용합니다. 모델은 17개 COCO 관절의 2D 좌표와 confidence를 출력합니다. 이 단계는 2D 검출이며, 3D 관절 좌표에는 정상적인 스테레오 캘리브레이션이 추가로 필요합니다.
+프레임에는 다음 시간값이 기록됩니다.
 
-단일 이미지 테스트:
+- timestamp_utc: UTC 시간 문자열
+- timestamp_unix_ns: Unix 기준 나노초
+- timestamp_monotonic_ns: 동일 컴퓨터의 단조 시계 기준 나노초
 
-```powershell
-.\.venv\Scripts\python.exe pose_estimation.py image --model models/yolo26n-pose.pt --input data/calibration/camera_0/calibration_000.png --output outputs/pose_test.png --imgsz 640 --conf 0.35
-```
+실시간 수집 시각은 양쪽 카메라 프레임을 순서대로 가져온 직후 호스트 컴퓨터에서 기록합니다. 카메라는 하드웨어 동기화되지 않습니다. 같은 컴퓨터에서 실행한 IMU 기록과 맞출 때는 monotonic 시각을 사용하고, 다른 장치의 IMU는 시계 오프셋을 별도로 맞춰야 합니다. 저장 빈도는 고정 25 Hz가 아니라 추론 속도에 따릅니다. IMU 샘플링 속도에 맞춰 보간하거나 리샘플링하세요.
 
-두 카메라 실시간 HPE:
+## 7. 저장된 2D 관절에서 3D 생성
 
-```powershell
-.\.venv\Scripts\python.exe pose_estimation.py live --model models/yolo26n-pose.pt --camera-a 0 --camera-b 1 --backend dshow --width 1920 --height 1080 --preview-width 1400 --preview-height 700 --imgsz 640 --conf 0.35 --device 0
-```
+pose_estimation.py live로 저장한 pose_*.json도 나중에 삼각측량할 수 있습니다.
 
-화면에서 양쪽 사람 관절이 검출될 때 `S`를 누르면 `outputs/pose_live`에 두 카메라의 2D 관절 JSON과 표시 이미지가 저장됩니다. `Q` 또는 `ESC`로 종료합니다. `--device auto`를 사용하면 CUDA가 있으면 GPU, 없으면 CPU를 자동 선택하고 GPU에서는 FP16을 사용합니다.
+    .\.venv\Scripts\python.exe stereo_pose.py reconstruct --input-dir outputs/pose_live --output-dir outputs/pose_3d --stereo-calibration outputs/stereo_calibration.npz --min-keypoint-conf 0.35
 
-## 7. Two-camera 3D pose reconstruction
+입력 JSON의 camera_a/camera_b 2D 관절을 사용해 새 타임스탬프 세션에 3D JSON을 만듭니다. 실시간 3D 수집과 달리 원본 카메라 프레임은 포함하지 않습니다. 2D JSON에 monotonic 시간이 없으므로 재구성 결과의 timestamp_monotonic_ns는 null이며, 저장 당시의 Unix 시각을 사용합니다.
 
-`stereo_pose.py` uses the existing YOLO 2D detections from camera 0 and camera 1, applies the stereo calibration, and triangulates the common COCO keypoints in millimeters. It also writes an `smpl_body_24` section using the SMPL body joint names. This first stage is a SMPL-compatible joint layout; it is not yet a fitted SMPL mesh.
+## 학습 데이터로 사용할 때
 
-Run the live 3D view:
+이 프로젝트의 3D 관절은 스테레오 영상에서 추정한 pseudo-label입니다. 모션 캡처 ground truth가 아닙니다. smpl_body_24는 COCO-17 검출 결과를 24개 SMPL 관절 이름에 맞춰 매핑한 XYZ 위치이며, SMPL 피팅 결과나 메시, SMPL 포즈 파라미터가 아닙니다. 일부 관절은 중간점 또는 proxy로 채워질 수 있으므로 source와 valid 필드를 확인하세요.
 
-```powershell
-.\.venv\Scripts\python.exe stereo_pose.py live --model models/yolo26n-pose.pt --stereo-calibration outputs/stereo_calibration.npz --camera-a 0 --camera-b 1 --backend dshow --width 1920 --height 1080 --preview-width 1600 --preview-height 700 --imgsz 640 --conf 0.35 --device 0
-```
-
-Press `S` or Space when at least six common joints are valid. Results are saved in `outputs/pose_3d`:
-
-- `stereo_pose_###.json`: raw 2D detections, triangulated `coco17_3d`, and derived `smpl_body_24`
-- `stereo_pose_###_camera_a.png`, `stereo_pose_###_camera_b.png`: annotated camera frames
-
-The JSON coordinates are in millimeters. The origin is the rectified camera A optical center, with X right, Y down, and Z forward. `reprojection_error_px` is a useful quality indicator; large values mean that the corresponding joint should not be trusted.
-
-Convert already saved 2D pose JSON files without opening the cameras:
-
-```powershell
-.\.venv\Scripts\python.exe stereo_pose.py reconstruct --input-dir outputs/pose_live --output-dir outputs/pose_3d --stereo-calibration outputs/stereo_calibration.npz --min-keypoint-conf 0.35
-```
-
-The reconstructed spine, pelvis, neck, head, hand, and foot entries are explicitly marked as `derived`, `wrist_proxy`, or `ankle_proxy`. A later SMPL fitting stage can replace these approximations with model-consistent joints and pose parameters.
+IMUPoser는 Vicon 모션 캡처를 기준 포즈로 사용하고 그 데이터에 SMPL을 맞춥니다 ([논문](https://arxiv.org/abs/2304.12518)). 따라서 이 프로젝트의 출력을 정답 데이터로 채택하기 전 재투영 오차와 누락 관절을 검토하고, 모션 캡처나 수동 검수 결과와 비교해 정확도를 확인하세요.

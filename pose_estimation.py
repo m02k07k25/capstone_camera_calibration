@@ -13,14 +13,13 @@ import numpy as np
 import torch
 from ultralytics import YOLO
 
-from camera_calibration import (
+from calibration.camera_io import (
     configure_capture,
     open_camera,
-    read_image,
     resize_preview,
     side_by_side,
-    write_image,
 )
+from calibration.image_io import read_image, write_image
 
 
 COCO_KEYPOINT_NAMES = (

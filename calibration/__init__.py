@@ -1,0 +1,1 @@
+"""Modular camera calibration tools."""
