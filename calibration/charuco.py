@@ -237,102 +237,54 @@ def run_generate_board(args: argparse.Namespace) -> int:
     board_height_mm = args.rows * args.square_size
     page_width_mm = 297.0
     page_height_mm = 210.0
-    left_columns = args.cols // 2
-    top_rows = args.rows // 2
-    pixel_mid_x = left_columns * pixels_per_square
-    pixel_mid_y = top_rows * pixels_per_square
-    tile_width_left_mm = left_columns * args.square_size
-    tile_width_right_mm = (args.cols - left_columns) * args.square_size
-    tile_height_top_mm = top_rows * args.square_size
-    tile_height_bottom_mm = (args.rows - top_rows) * args.square_size
+    margin_mm = 10.0
+
     if (
-        max(tile_width_left_mm, tile_width_right_mm) > 287.0
-        or max(tile_height_top_mm, tile_height_bottom_mm) > 200.0
+        board_width_mm > page_width_mm - 2 * margin_mm
+        or board_height_mm > page_height_mm - 2 * margin_mm
     ):
-        raise ValueError("보드가 A4 4장 분할 인쇄 범위를 벗어납니다.")
-
-    tiles = (
-        (
-            "A1",
-            0,
-            0,
-            pixel_mid_x,
-            pixel_mid_y,
-            tile_width_left_mm,
-            tile_height_top_mm,
-        ),
-        (
-            "A2",
-            pixel_mid_x,
-            0,
-            board_image.shape[1],
-            pixel_mid_y,
-            tile_width_right_mm,
-            tile_height_top_mm,
-        ),
-        (
-            "B1",
-            0,
-            pixel_mid_y,
-            pixel_mid_x,
-            board_image.shape[0],
-            tile_width_left_mm,
-            tile_height_bottom_mm,
-        ),
-        (
-            "B2",
-            pixel_mid_x,
-            pixel_mid_y,
-            board_image.shape[1],
-            board_image.shape[0],
-            tile_width_right_mm,
-            tile_height_bottom_mm,
-        ),
-    )
-    args.output_dir.mkdir(parents=True, exist_ok=True)
-    ruler_y = 15.0
-    written: list[Path] = []
-
-    for label, x0, y0, x1, y1, tile_width_mm, tile_height_mm in tiles:
-        tile_image = board_image[y0:y1, x0:x1]
-        encoded_ok, encoded_png = cv2.imencode(".png", tile_image)
-        if not encoded_ok:
-            raise RuntimeError(f"ChArUco 보드 조각 {label}을 PNG로 만들지 못했습니다.")
-        image_data = base64.b64encode(encoded_png.tobytes()).decode("ascii")
-        left = (page_width_mm - tile_width_mm) / 2.0
-        top = (page_height_mm - tile_height_mm) / 2.0
-        right = left + tile_width_mm
-        bottom = top + tile_height_mm
-        crop_marks = (
-            f"M {left - 4:.3f} {top:.3f} h 3 M {left:.3f} {top - 4:.3f} v 3 "
-            f"M {right + 1:.3f} {top:.3f} h 3 M {right:.3f} {top - 4:.3f} v 3 "
-            f"M {left - 4:.3f} {bottom:.3f} h 3 M {left:.3f} {bottom + 1:.3f} v 3 "
-            f"M {right + 1:.3f} {bottom:.3f} h 3 M {right:.3f} {bottom + 1:.3f} v 3"
+        raise ValueError(
+            "현재 보드는 A4 가로 한 장에 100% 실물 크기로 들어가지 않습니다. "
+            "cols/rows 또는 square-size를 줄이세요."
         )
-        svg = f'''<?xml version="1.0" encoding="UTF-8"?>
+
+    encoded_ok, encoded_png = cv2.imencode(".png", board_image)
+    if not encoded_ok:
+        raise RuntimeError("ChArUco 보드를 PNG로 만들지 못했습니다.")
+    image_data = base64.b64encode(encoded_png.tobytes()).decode("ascii")
+
+    left = (page_width_mm - board_width_mm) / 2.0
+    top = (page_height_mm - board_height_mm) / 2.0
+    ruler_y = 7.0
+
+    svg = f'''<?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"
      width="297mm" height="210mm" viewBox="0 0 297 210">
   <rect width="297" height="210" fill="white"/>
-  <image x="{left:.3f}" y="{top:.3f}" width="{tile_width_mm:.3f}"
-         height="{tile_height_mm:.3f}" preserveAspectRatio="none"
+  <image x="{left:.3f}" y="{top:.3f}" width="{board_width_mm:.3f}"
+         height="{board_height_mm:.3f}" preserveAspectRatio="none"
          xlink:href="data:image/png;base64,{image_data}"/>
-  <path d="{crop_marks}" fill="none" stroke="black" stroke-width="0.25"/>
   <g fill="black" stroke="black" stroke-width="0.25">
     <line x1="10" y1="{ruler_y:.3f}" x2="110" y2="{ruler_y:.3f}"/>
     <line x1="10" y1="{ruler_y - 1.5:.3f}" x2="10" y2="{ruler_y + 1.5:.3f}"/>
     <line x1="110" y1="{ruler_y - 1.5:.3f}" x2="110" y2="{ruler_y + 1.5:.3f}"/>
   </g>
-  <text x="114" y="{ruler_y + 1.2:.3f}" font-family="Arial" font-size="3.2">100 mm check (print at 100%)</text>
-  <text x="{page_width_mm / 2:.3f}" y="195" text-anchor="middle"
-        font-family="Arial" font-size="4">{label} | A4 landscape | board {board_width_mm:g} x {board_height_mm:g} mm</text>
+  <text x="114" y="{ruler_y + 1.2:.3f}" font-family="Arial" font-size="3.2">
+    100 mm check (print at 100%)
+  </text>
+  <text x="{page_width_mm / 2:.3f}" y="206" text-anchor="middle"
+        font-family="Arial" font-size="3.6">
+    A4 landscape | ChArUco {args.cols} x {args.rows} | square {args.square_size:g} mm |
+    marker {args.marker_size:g} mm | {args.dictionary}
+  </text>
 </svg>
 '''
-        output_path = args.output_dir / f"charuco_board_{label}.svg"
-        output_path.write_text(svg, encoding="utf-8")
-        written.append(output_path)
+    args.output_dir.mkdir(parents=True, exist_ok=True)
+    output_path = args.output_dir / "charuco_board_A4.svg"
+    output_path.write_text(svg, encoding="utf-8")
 
     print(
-        f"A4 분할 ChArUco 보드 생성: {len(written)}장 -> {args.output_dir} "
+        f"A4 한 장 ChArUco 보드 생성: {output_path} "
         f"({board_width_mm:g} x {board_height_mm:g} mm, "
         f"{args.cols} x {args.rows}칸, {args.dictionary})"
     )
