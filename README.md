@@ -6,7 +6,7 @@
 
 | 단계 | 입력 | 출력 |
 |---|---|---|
-| 보드 생성 | 보드 규격 옵션 | A4 인쇄용 SVG 네 장 |
+| 보드 생성 | 보드 규격 옵션 | A4 인쇄용 SVG 한 장 |
 | 보정 촬영 | 카메라 영상과 ChArUco 보드 | 카메라별 PNG 또는 같은 번호의 이미지 쌍 |
 | 단안 보정 | 한 카메라의 보정 이미지 | 카메라 내부 파라미터 NPZ, 오차와 설정 JSON |
 | 스테레오 보정 | 양쪽 보정 이미지, 두 단안 결과 | 카메라 사이 파라미터 NPZ와 요약 JSON |
@@ -25,7 +25,7 @@
     ├─ pose_estimation.py          2D 관절 추론
     ├─ stereo_pose.py              3D 수집·재구성 명령 진입점
     ├─ pose3d/                     삼각측량, 관절 매핑, 저장, 미리보기
-    ├─ data/charuco_board_a4/      A4 인쇄용 보드 SVG 네 장
+    ├─ data/charuco_board_a4/      A4 인쇄용 보드 SVG 한 장
     ├─ data/calibration/           보정 촬영 이미지 (로컬 생성)
     ├─ outputs/                    보정 결과와 관절 데이터 (로컬 생성)
     ├─ models/yolo26n-pose.pt      YOLO 포즈 모델 (별도 준비)
@@ -48,11 +48,11 @@ NVIDIA GPU를 사용하는 경우 의존성 설치 후 CUDA용 PyTorch를 설치
 
 ## 1. A4 ChArUco 보드 준비
 
-기본 보드는 가로 10칸, 세로 7칸이며 한 칸은 40 mm, 마커는 28 mm입니다. 전체 보드 크기는 400 × 280 mm이고 내부 코너는 9 × 6개입니다. 각 마커의 ID로 위치와 방향을 구분하므로 체커보드의 좌우·180도 반전 대응 문제를 피할 수 있습니다.
+기본 보드는 가로 7칸, 세로 5칸이며 한 칸은 35 mm, 마커는 24.5 mm입니다. 전체 보드 크기는 245 × 175 mm이고 내부 코너는 6 × 4개입니다. 각 마커의 ID로 위치와 방향을 구분하므로 체커보드의 좌우·180도 반전 대응 문제를 피할 수 있습니다.
 
     .\.venv\Scripts\python.exe camera_calibration.py generate-board --output-dir data/charuco_board_a4
 
-data/charuco_board_a4에 A4 가로 SVG 네 장이 생성됩니다. A1/A2는 위쪽 3행, B1/B2는 아래쪽 4행입니다. 각 페이지를 실제 크기 100%로 인쇄하고 페이지 맞춤/축소를 끕니다. 100 mm 확인선을 자로 확인한 뒤 A1 A2 / B1 B2 순서로 이어 붙여 평평하고 단단한 판에 부착합니다.
+data/charuco_board_a4에 A4 가로 SVG 한 장(charuco_board_A4.svg)이 생성됩니다. 실제 크기 100%로 인쇄하고 페이지 맞춤/축소를 끕니다. 100 mm 확인선을 자로 확인한 뒤, 출력물을 평평하고 단단한 판에 부착합니다.
 
 보드 규격을 바꾸면 생성, 촬영, 단안 보정, 스테레오 보정 명령에 같은 cols, rows, square-size, marker-size, dictionary 값을 사용해야 합니다. 기존 체커보드 이미지는 이 ChArUco 검출기로 사용할 수 없으므로 새 보드로 다시 촬영하세요.
 
@@ -64,7 +64,7 @@ data/charuco_board_a4에 A4 가로 SVG 네 장이 생성됩니다. A1/A2는 위�
 
 두 카메라가 0번과 1번이면 다음 명령으로 쌍을 촬영합니다.
 
-    .\.venv\Scripts\python.exe camera_calibration.py capture-pair --camera-a 0 --camera-b 1 --backend dshow --cols 10 --rows 7 --square-size 40 --marker-size 28 --dictionary DICT_5X5_100 --width 1920 --height 1080 --preview-width 1400 --preview-height 700
+    .\.venv\Scripts\python.exe camera_calibration.py capture-pair --camera-a 0 --camera-b 1 --backend dshow --cols 7 --rows 5 --square-size 35 --marker-size 24.5 --dictionary DICT_5X5_100 --width 1920 --height 1080 --preview-width 1400 --preview-height 700
 
 양쪽 영상에 같은 코너 ID가 8개 이상 잡히고 보드가 2초간 안정되면 이미지 한 쌍을 저장합니다. 기본 저장 간격은 4초입니다. 보드를 여러 위치·거리·기울기로 옮기고 저장 순간에는 잠시 멈춥니다. Q 또는 ESC를 눌러 종료합니다.
 
