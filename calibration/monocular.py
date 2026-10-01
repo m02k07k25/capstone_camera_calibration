@@ -44,7 +44,8 @@ def reprojection_errors(
         # arrays before calculating the reprojection error.
         image_xy = np.asarray(image, dtype=np.float64).reshape(-1, 2)
         projected_xy = np.asarray(projected, dtype=np.float64).reshape(-1, 2)
-        error = float(np.linalg.norm(image_xy - projected_xy) / len(projected_xy))
+        # Per-view RMS in pixels; dividing by N would understate it by sqrt(N).
+        error = float(np.sqrt(np.mean(np.sum((image_xy - projected_xy) ** 2, axis=1))))
         errors.append(float(error))
     return errors
 
@@ -96,6 +97,7 @@ def save_calibration(
         "rms_reprojection_error": float(rms_error),
         "mean_reprojection_error": mean_error,
         "per_view_reprojection_error": per_view_errors,
+        "reprojection_metric": "per-view RMS pixel distance; mean is an unweighted mean of view RMS values",
         "used_images": [path.name for path in used_images],
         "camera_matrix": camera_matrix.tolist(),
         "dist_coeffs": distortion.reshape(-1).tolist(),

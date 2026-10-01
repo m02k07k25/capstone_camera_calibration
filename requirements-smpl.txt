@@ -1,0 +1,4 @@
+# Optional. Download the licensed SMPL model separately; never commit its weights.
+# Install the project's requirements.txt first for capture and OpenCV.
+smplx>=0.1.28
+torch>=2.1

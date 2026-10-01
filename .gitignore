@@ -5,6 +5,7 @@ __pycache__/
 venv/
 env/
 .env
+.pytest_cache/
 
 # IDE and OS
 .idea/
@@ -18,5 +19,7 @@ data/calibration/*
 outputs/*
 !outputs/.gitkeep
 
-# Downloaded pretrained model weights
-models/*.pt
+# Downloaded pretrained/licensed models must never enter the repository.
+models/
+*.pkl
+*.pickle

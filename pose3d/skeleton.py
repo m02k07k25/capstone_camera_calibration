@@ -1,212 +1,99 @@
-"""COCO and SMPL joint layouts and conversions."""
+"""Observed COCO-17 joints and a DISPLAY-ONLY body24 proxy.
 
+A COCO landmark is not an SMPL rotation, nor necessarily the same anatomical
+point as an SMPL joint with the same name. Only a body-model fit produces SMPL.
+"""
 from __future__ import annotations
-
 import numpy as np
 
-from pose_estimation import COCO_KEYPOINT_NAMES
-
-
-SMPL_BODY_JOINT_NAMES = (
-    "pelvis",
-    "left_hip",
-    "right_hip",
-    "spine1",
-    "left_knee",
-    "right_knee",
-    "spine2",
-    "left_ankle",
-    "right_ankle",
-    "spine3",
-    "left_foot",
-    "right_foot",
-    "neck",
-    "left_collar",
-    "right_collar",
-    "head",
-    "left_shoulder",
-    "right_shoulder",
-    "left_elbow",
-    "right_elbow",
-    "left_wrist",
-    "right_wrist",
-    "left_hand",
-    "right_hand",
+# Keep this lightweight: offline dataset tools do not need YOLO or PyTorch.
+COCO_KEYPOINT_NAMES = (
+    "nose", "left_eye", "right_eye", "left_ear", "right_ear",
+    "left_shoulder", "right_shoulder", "left_elbow", "right_elbow",
+    "left_wrist", "right_wrist", "left_hip", "right_hip",
+    "left_knee", "right_knee", "left_ankle", "right_ankle",
 )
-
-
-SMPL_BONES = (
-    ("pelvis", "left_hip"),
-    ("pelvis", "right_hip"),
-    ("pelvis", "spine1"),
-    ("spine1", "spine2"),
-    ("spine2", "spine3"),
-    ("spine3", "neck"),
-    ("neck", "head"),
-    ("neck", "left_collar"),
-    ("neck", "right_collar"),
-    ("left_collar", "left_shoulder"),
-    ("right_collar", "right_shoulder"),
-    ("left_shoulder", "left_elbow"),
-    ("left_elbow", "left_wrist"),
-    ("left_wrist", "left_hand"),
-    ("right_shoulder", "right_elbow"),
-    ("right_elbow", "right_wrist"),
-    ("right_wrist", "right_hand"),
-    ("left_hip", "left_knee"),
-    ("left_knee", "left_ankle"),
-    ("left_ankle", "left_foot"),
-    ("right_hip", "right_knee"),
-    ("right_knee", "right_ankle"),
-    ("right_ankle", "right_foot"),
-)
-
-
 COCO_INDEX = {name: index for index, name in enumerate(COCO_KEYPOINT_NAMES)}
+SMPL_BODY_JOINT_NAMES = (
+    "pelvis", "left_hip", "right_hip", "spine1", "left_knee", "right_knee",
+    "spine2", "left_ankle", "right_ankle", "spine3", "left_foot", "right_foot",
+    "neck", "left_collar", "right_collar", "head", "left_shoulder",
+    "right_shoulder", "left_elbow", "right_elbow", "left_wrist", "right_wrist",
+    "left_hand", "right_hand",
+)
+SMPL_PARENTS = (-1, 0, 0, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 9, 9, 12,
+                13, 14, 16, 17, 18, 19, 20, 21)
+SMPL_BONES = tuple((SMPL_BODY_JOINT_NAMES[p], SMPL_BODY_JOINT_NAMES[i])
+                   for i, p in enumerate(SMPL_PARENTS) if p >= 0)
 
 
-def midpoint(first: np.ndarray | None, second: np.ndarray | None) -> np.ndarray | None:
-    if first is None or second is None:
-        return None
-    return 0.5 * (first + second)
+def midpoint(first, second):
+    return None if first is None or second is None else (first + second) * 0.5
 
 
-def interpolate(
-    first: np.ndarray | None,
-    second: np.ndarray | None,
-    fraction: float,
-) -> np.ndarray | None:
-    if first is None or second is None:
-        return None
-    return first + fraction * (second - first)
+def interpolate(first, second, fraction):
+    return None if first is None or second is None else first + fraction * (second - first)
 
 
-def smpl_body_from_coco(
-    points_3d: np.ndarray,
-    valid: np.ndarray,
-) -> dict[str, dict[str, object]]:
-    def direct(name: str) -> np.ndarray | None:
-        index = COCO_INDEX[name]
-        if not valid[index] or not np.isfinite(points_3d[index]).all():
-            return None
-        return points_3d[index].copy()
+def body24_proxy_from_coco(points_3d: np.ndarray, valid: np.ndarray) -> dict:
+    """For the preview only. NEVER use this proxy as SMPL supervision."""
+    points_3d = np.asarray(points_3d, dtype=np.float64)
+    valid = np.asarray(valid, dtype=bool)
+    if points_3d.shape != (17, 3) or valid.shape != (17,):
+        raise ValueError("COCO points and validity must have shapes (17,3), (17,)")
 
-    def entry(
-        name: str,
-        value: np.ndarray | None,
-        source: str,
-        inputs: list[str] | None = None,
-    ) -> dict[str, object]:
-        return {
-            "name": name,
-            "xyz_mm": None if value is None else [float(v) for v in value],
-            "source": source if value is not None else "missing",
-            "input_joints": inputs or [],
-        }
+    def point(name):
+        i = COCO_INDEX[name]
+        return points_3d[i].copy() if valid[i] and np.isfinite(points_3d[i]).all() else None
 
-    left_hip = direct("left_hip")
-    right_hip = direct("right_hip")
-    left_shoulder = direct("left_shoulder")
-    right_shoulder = direct("right_shoulder")
-    pelvis = midpoint(left_hip, right_hip)
-    shoulder_center = midpoint(left_shoulder, right_shoulder)
-    head = midpoint(direct("left_ear"), direct("right_ear"))
-    head_inputs = ["left_ear", "right_ear"]
+    values = {name: (point(name), "coco_landmark", [name])
+              for name in SMPL_BODY_JOINT_NAMES if name in COCO_INDEX}
+    pelvis = midpoint(point("left_hip"), point("right_hip"))
+    shoulders = midpoint(point("left_shoulder"), point("right_shoulder"))
+    values["pelvis"] = (pelvis, "hip_midpoint", ["left_hip", "right_hip"])
+    values["neck"] = (shoulders, "shoulder_midpoint", ["left_shoulder", "right_shoulder"])
+    for name, fraction in (("spine1", .25), ("spine2", .5), ("spine3", .75)):
+        values[name] = (interpolate(pelvis, shoulders, fraction), "body_interpolation",
+                        ["left_hip", "right_hip", "left_shoulder", "right_shoulder"])
+    for side in ("left", "right"):
+        values[f"{side}_collar"] = (interpolate(shoulders, point(f"{side}_shoulder"), .5),
+                                    "shoulder_interpolation", ["left_shoulder", "right_shoulder"])
+        for target, source in (("foot", "ankle"), ("hand", "wrist")):
+            values[f"{side}_{target}"] = (point(f"{side}_{source}"),
+                                           f"{source}_proxy", [f"{side}_{source}"])
+    head, inputs = None, []
+    for first, second in (("left_ear", "right_ear"), ("left_eye", "right_eye")):
+        head = midpoint(point(first), point(second))
+        if head is not None:
+            inputs = [first, second]
+            break
     if head is None:
-        head = midpoint(direct("left_eye"), direct("right_eye"))
-        head_inputs = ["left_eye", "right_eye"]
-    if head is None:
-        head = direct("nose")
-        head_inputs = ["nose"]
-
-    values: dict[str, tuple[np.ndarray | None, str, list[str]]] = {
-        "pelvis": (pelvis, "hip_midpoint", ["left_hip", "right_hip"]),
-        "left_hip": (left_hip, "direct", ["left_hip"]),
-        "right_hip": (right_hip, "direct", ["right_hip"]),
-        "spine1": (
-            interpolate(pelvis, shoulder_center, 0.25),
-            "body_interpolation",
-            ["pelvis", "left_shoulder", "right_shoulder"],
-        ),
-        "left_knee": (direct("left_knee"), "direct", ["left_knee"]),
-        "right_knee": (direct("right_knee"), "direct", ["right_knee"]),
-        "spine2": (
-            interpolate(pelvis, shoulder_center, 0.50),
-            "body_interpolation",
-            ["pelvis", "left_shoulder", "right_shoulder"],
-        ),
-        "left_ankle": (direct("left_ankle"), "direct", ["left_ankle"]),
-        "right_ankle": (direct("right_ankle"), "direct", ["right_ankle"]),
-        "spine3": (
-            interpolate(pelvis, shoulder_center, 0.75),
-            "body_interpolation",
-            ["pelvis", "left_shoulder", "right_shoulder"],
-        ),
-        "left_foot": (
-            direct("left_ankle"),
-            "ankle_proxy",
-            ["left_ankle"],
-        ),
-        "right_foot": (
-            direct("right_ankle"),
-            "ankle_proxy",
-            ["right_ankle"],
-        ),
-        "neck": (
-            shoulder_center,
-            "shoulder_midpoint",
-            ["left_shoulder", "right_shoulder"],
-        ),
-        "left_collar": (
-            interpolate(shoulder_center, left_shoulder, 0.5),
-            "shoulder_interpolation",
-            ["left_shoulder", "right_shoulder"],
-        ),
-        "right_collar": (
-            interpolate(shoulder_center, right_shoulder, 0.5),
-            "shoulder_interpolation",
-            ["left_shoulder", "right_shoulder"],
-        ),
-        "head": (head, "face_midpoint" if len(head_inputs) == 2 else "nose_proxy", head_inputs),
-        "left_shoulder": (left_shoulder, "direct", ["left_shoulder"]),
-        "right_shoulder": (right_shoulder, "direct", ["right_shoulder"]),
-        "left_elbow": (direct("left_elbow"), "direct", ["left_elbow"]),
-        "right_elbow": (direct("right_elbow"), "direct", ["right_elbow"]),
-        "left_wrist": (direct("left_wrist"), "direct", ["left_wrist"]),
-        "right_wrist": (direct("right_wrist"), "direct", ["right_wrist"]),
-        "left_hand": (direct("left_wrist"), "wrist_proxy", ["left_wrist"]),
-        "right_hand": (direct("right_wrist"), "wrist_proxy", ["right_wrist"]),
-    }
-    return {
-        name: entry(name, *values[name])
-        for name in SMPL_BODY_JOINT_NAMES
-    }
+        head, inputs = point("nose"), ["nose"]
+    values["head"] = (head, "face_proxy", inputs)
+    return {name: {"name": name, "xyz_mm": None if values[name][0] is None else values[name][0].tolist(),
+                   "valid": values[name][0] is not None,
+                   "source": values[name][1] if values[name][0] is not None else "missing",
+                   "input_joints": values[name][2], "is_smpl_joint": False}
+            for name in SMPL_BODY_JOINT_NAMES}
 
 
-def format_coco_3d(
-    points_3d: np.ndarray,
-    valid: np.ndarray,
-    confidence: np.ndarray,
-    reprojection_error: np.ndarray,
-) -> list[dict[str, object]]:
-    result: list[dict[str, object]] = []
-    for index, name in enumerate(COCO_KEYPOINT_NAMES):
-        point_valid = bool(valid[index]) and np.isfinite(points_3d[index]).all()
-        result.append(
-            {
-                "name": name,
-                "xyz_mm": (
-                    [float(value) for value in points_3d[index]]
-                    if point_valid
-                    else None
-                ),
-                "confidence": float(confidence[index]),
-                "reprojection_error_px": (
-                    float(reprojection_error[index])
-                    if np.isfinite(reprojection_error[index])
-                    else None
-                ),
-                "valid": point_valid,
-            }
-        )
+def smpl_body_from_coco(points_3d: np.ndarray, valid: np.ndarray) -> dict:
+    """Deprecated preview API; retained for existing runtime imports, NOT a fit."""
+    return body24_proxy_from_coco(points_3d, valid)
+
+
+def format_coco_3d(points_3d, valid, confidence, reprojection_error) -> list[dict]:
+    points = np.asarray(points_3d, dtype=np.float64)
+    valid = np.asarray(valid, dtype=bool)
+    confidence = np.asarray(confidence, dtype=np.float64)
+    errors = np.asarray(reprojection_error, dtype=np.float64)
+    if points.shape != (17, 3) or any(a.shape != (17,) for a in (valid, confidence, errors)):
+        raise ValueError("Expected COCO-17 arrays")
+    result = []
+    for i, name in enumerate(COCO_KEYPOINT_NAMES):
+        good = bool(valid[i] and np.isfinite(points[i]).all())
+        result.append({"name": name, "xyz_mm": points[i].tolist() if good else None,
+                       "confidence": float(np.clip(confidence[i], 0, 1)) if np.isfinite(confidence[i]) else 0.0,
+                       "reprojection_error_px": float(errors[i]) if np.isfinite(errors[i]) else None,
+                       "valid": good})
     return result

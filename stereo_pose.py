@@ -1,11 +1,18 @@
 """CLI for live stereo-pose capture and offline 3D reconstruction."""
-
 from __future__ import annotations
-
 import argparse
+import math
 from pathlib import Path
 
-from pose3d.runtime import run_live, run_reconstruct
+
+def run_live(args):
+    from pose3d.runtime import run_live as handler
+    return handler(args)
+
+
+def run_reconstruct(args):
+    from pose3d.runtime import run_reconstruct as handler
+    return handler(args)
 
 
 def positive_int(text: str) -> int:
@@ -24,15 +31,15 @@ def nonnegative_int(text: str) -> int:
 
 def positive_float(text: str) -> float:
     value = float(text)
-    if value <= 0:
-        raise argparse.ArgumentTypeError("enter a number greater than zero")
+    if not math.isfinite(value) or value <= 0:
+        raise argparse.ArgumentTypeError("enter a finite number greater than zero")
     return value
 
 
 def nonnegative_float(text: str) -> float:
     value = float(text)
-    if value < 0:
-        raise argparse.ArgumentTypeError("enter a number greater than or equal to zero")
+    if not math.isfinite(value) or value < 0:
+        raise argparse.ArgumentTypeError("enter a finite number greater than or equal to zero")
     return value
 
 
@@ -50,26 +57,19 @@ def image_quality(text: str) -> int:
     return value
 
 
-def add_reconstruction_options(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument(
-        "--stereo-calibration",
-        type=Path,
-        default=Path("outputs/stereo_calibration.npz"),
-    )
-    parser.add_argument("--min-keypoint-conf", type=unit_float, default=0.35)
+def add_reconstruction_options(parser):
+    parser.add_argument("--stereo-calibration", type=Path, default=Path("outputs/stereo_calibration.npz"))
+    parser.add_argument("--min-keypoint-conf", type=unit_float, default=.35)
     parser.add_argument("--max-reprojection-error", type=positive_float, default=20.0)
-    parser.add_argument("--smooth-alpha", type=unit_float, default=0.35)
+    parser.add_argument("--smooth-alpha", type=unit_float, default=.35)
     parser.add_argument("--max-jump-mm", type=positive_float, default=1200.0)
     parser.add_argument("--hold-frames", type=nonnegative_int, default=3)
 
 
-def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        description="Capture timestamped 3D pose labels from two cameras"
-    )
+def build_parser():
+    parser = argparse.ArgumentParser(description="Capture timestamped COCO-17 3D pseudo-labels; SMPL fitting is offline")
     commands = parser.add_subparsers(dest="command", required=True)
-
-    live = commands.add_parser("live", help="capture and save live 3D pose samples")
+    live = commands.add_parser("live", help="capture and save live 3D pose observations")
     live.add_argument("--model", type=Path, default=Path("models/yolo26n-pose.pt"))
     live.add_argument("--camera-a", type=int, default=0)
     live.add_argument("--camera-b", type=int, default=1)
@@ -80,26 +80,19 @@ def build_parser() -> argparse.ArgumentParser:
     live.add_argument("--preview-height", type=positive_int, default=700)
     live.add_argument("--panel-width", type=positive_int, default=420)
     live.add_argument("--imgsz", type=positive_int, default=640)
-    live.add_argument("--conf", type=unit_float, default=0.35)
+    live.add_argument("--conf", type=unit_float, default=.35)
     live.add_argument("--max-persons", type=positive_int, default=1)
     live.add_argument("--device", default="auto", help="auto, cpu, or a GPU index")
-    live.add_argument(
-        "--save-interval",
-        type=nonnegative_float,
-        default=0.0,
-        help="seconds between saved samples; 0 saves every valid frame",
-    )
-    live.add_argument("--save-min-valid", type=positive_int, default=6)
-    live.add_argument("--save-images", action="store_true", help="save paired camera JPEGs")
+    live.add_argument("--save-interval", type=nonnegative_float, default=0.0,
+                      help="seconds between saved samples; 0 preserves every processed frame, NOT guaranteed camera fps")
+    live.add_argument("--save-min-valid", type=nonnegative_int, default=0,
+                      help="0 preserves missing/low-quality frames and their masks; positive values intentionally discard frames")
+    live.add_argument("--save-images", action="store_true", help="also save acquired camera JPEGs; disk/encoding can limit rate")
     live.add_argument("--image-quality", type=image_quality, default=92)
     live.add_argument("--output-dir", type=Path, default=Path("outputs/pose_3d"))
     add_reconstruction_options(live)
     live.set_defaults(handler=run_live)
-
-    reconstruct = commands.add_parser(
-        "reconstruct",
-        help="make timestamped 3D samples from saved two-camera 2D pose files",
-    )
+    reconstruct = commands.add_parser("reconstruct", help="reconstruct saved two-camera 2D pose JSONs")
     reconstruct.add_argument("--input-dir", type=Path, default=Path("outputs/pose_live"))
     reconstruct.add_argument("--output-dir", type=Path, default=Path("outputs/pose_3d"))
     reconstruct.add_argument("--limit", type=nonnegative_int, default=0)
