@@ -1,25 +1,18 @@
-# Python
+.venv/
 __pycache__/
 *.py[cod]
-.venv/
-venv/
-env/
-.env
-.pytest_cache/
 
-# IDE and OS
-.idea/
-.vscode/
-.DS_Store
-Thumbs.db
-
-# Local calibration data and generated results
-data/calibration/*
-!data/calibration/.gitkeep
-outputs/*
-!outputs/.gitkeep
-
-# Downloaded pretrained/licensed models must never enter the repository.
+ACCAD/
 models/
-*.pkl
-*.pickle
+SMPL_python_v.1.1.0/
+outputs/
+synthetic_dataset_v1/
+synthetic_motions/
+synthetic_rehab_motions/
+
+*.npz
+*.mat
+
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
